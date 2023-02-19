@@ -6,6 +6,7 @@ target device: Seeed studio XIAO nRF52840 Sense (w/LSM6DS3TR-C)
 r1.0 2023/02/15 initial release
 r1.1 2023/02/19 minor modification. append, translate and correct comments
 r1.2 2023/02/19 fix typo
+r1.3 2023/02/20 fix typo
 
 memo.
 Reader & Kindle : forward page with volume decrement, reverse with increment
@@ -210,7 +211,7 @@ def define_sensor():
 
 # calculate battery level in percent and set low battery alart
 def battery_percent(readout, led_array):
-    # vbat[mV] = raw*3300[mV]*(510k/(1M+510k))/2^16 in linear region (Vdd>3.3V)
+    # vbat[mV] = raw*3300[mV]*((1M+510k)/510k)/2^16 in linear region (Vdd>3.3V)
     vbat = readout * (3300 / 65536) * (1510 / 510)
     # experimentally, 100% : 3.7V~23900raw, 0% : 2.5V~21400raw
     # see: https://twitter.com/pado3/status/1613699618092744704/photo/3
