@@ -6,6 +6,7 @@ target device: Seeed studio XIAO nRF52840 Sense (w/LSM6DS3TR-C)
 r1.0  2023/02/15 initial release of eBook_turner_w2
 r1.0a 2023/02/15 remove double tap function (may work with /Sense)
 r1.1a 2023/02/19 minor modification. append, translate and correct comments
+r1.2a 2023/02/19 fix typo
 
 memo.
 Reader & Kindle : forward page with volume decrement, reverse with increment
@@ -105,7 +106,7 @@ def define_switch():
 
 # calculate battery level in percent and set low battery alart
 def battery_percent(readout, led_array):
-    # vbat[raw] = 3300[mV]*(510k/(1M+510k))/2^16 in linear region (Vdd>3.3V)
+    # vbat[mV] = raw*3300[mV]*(510k/(1M+510k))/2^16 in linear region (Vdd>3.3V)
     vbat = readout * (3300 / 65536) * (1510 / 510)
     # experimentally, 100% : 3.7V~23900raw, 0% : 2.5V~21400raw
     # see: https://twitter.com/pado3/status/1613699618092744704/photo/3
@@ -308,7 +309,6 @@ def ebook_turner(tadv=60, tls=60):
         else:
             print('there is no keycode (may wakeup by timer)', end='')
         if keycode == 0x30:    # power off
-            # ble_disconnection(ble)
             deep_sleep(ble, sw_array, led_array)
     print('\ndisconnected')
     deep_sleep(ble, sw_array, led_array)
