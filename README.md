@@ -11,4 +11,5 @@ ebook_turner_w2-sch.png is circuit schematics.
 I wrote blog about this item in Japanese. Please access if you need.<br />
 https://pado.tea-nifty.com/top/2023/02/post-3636c0.html
 <p></p>
-r1.1 2023/02/19 minor modification. append, translate and correct comments
+r1.1 2023/02/19 minor modification. append, translate and correct comments<br />
+r1.2 2023/02/19 fix typo
