@@ -1,15 +1,21 @@
 '''
-eBook_turner_w2 Android用電子書籍ページめくり機 BLE版 ver.2 by @pado3
+eBook_turner_w2-woTap.py
+subset of e-book page turner for android with BLE ver.2 by @pado3
 target device: Seeed studio XIAO nRF52840 Sense (w/LSM6DS3TR-C)
 
-r1.0  2023/02/15 initial release
-r1.0a 2023/02/15 without double tap function (may work with /Sense)
+r1.0  2023/02/15 initial release of eBook_turner_w2
+r1.0a 2023/02/15 remove double tap function (may work with /Sense)
+r1.1a 2023/02/19 minor modification. append, translate and correct comments
 
-Reader&KindleはUPで戻りDOWNで送る。Kinoppyは逆。読書尚友&なろうリーダは任意。
-FWD:D3+4, REV:D8+9, BACK/PW:D5+6, mode:D7 (3,8,5,7が入力、4,9,6が割り込み)
-D5はDeep sleep中も監視するため外部プルアップ(100k)
-D7はKinoppyモードで常時LOWに引くため内部13kではリーク大きく外部プルアップ(100k)
-外部LED Anode:D1(常時H), Kathode:D0(XIAO内蔵LEDと同じく逆論理)
+memo.
+Reader & Kindle : forward page with volume decrement, reverse with increment
+Kinoppy : forward page with volume increment, reverse with decrement
+読書尚友 & なろうリーダ : selectable
+FWD:D3+4, REV:D8+9, BACK/POWER:D5+6, mode:D7 (3,8,5,7:input, 4,9,6:interrupt)
+D3, D8:internal pullup (typ.13k)
+D5:external pullup 100k(use interrupt with deep sleep)
+D7:external pullup 100k(internal is too small when Kinoppy keep low)
+external LED Anode:D1(always True), Kathode:D0 (reverse logic same as internal)
 '''
 import alarm
 import analogio     # use .AnalogIn() only
@@ -36,7 +42,7 @@ def vbatt_port_guard():
     # set P0.14 to LOW
     ebat = digitalio.DigitalInOut(board.READ_BATT_ENABLE)
     ebat.direction = digitalio.Direction.OUTPUT
-    ebat.value = False  # should set low before ADC or until charge
+    ebat.value = False  # MUST be set low in battery operatoin
     time.sleep(0.1)     # wait for ebat pin to GND
 
 
@@ -66,7 +72,7 @@ def define_led():
         board.LED_RED,      # 2.2k
         board.LED_GREEN,    # 10k (?)
         board.LED_BLUE,     # 2.2k
-        board.D0,           # additional LED with low current (10k, 0.15mA)
+        board.D0,           # additional LED with low current (10k, 0.1mA)
     ]
     for pin in led_pins:
         led_pin = digitalio.DigitalInOut(pin)
@@ -97,16 +103,21 @@ def define_switch():
     return sw_array
 
 
-# calculate battery level in percent and set low battery LED
+# calculate battery level in percent and set low battery alart
 def battery_percent(readout, led_array):
+    # vbat[raw] = 3300[mV]*(510k/(1M+510k))/2^16 in linear region (Vdd>3.3V)
     vbat = readout * (3300 / 65536) * (1510 / 510)
+    # experimentally, 100% : 3.7V~23900raw, 0% : 2.5V~21400raw
+    # see: https://twitter.com/pado3/status/1613699618092744704/photo/3
     pc = int(100 * (readout - 21400) / (23900 - 21400))
     print('VBATT:{:.0f}mV, {}%, '.format(vbat, pc), end='')
+    # percentage limitation in BatteryService : uint8, 0~100
     if pc > 100:
         pc = 100
     elif pc < 0:
         pc = 0
-    if pc < 20:     # below 20% (~3.3V), RED led always ON
+    # low battery alart
+    if pc < 20:     # below 20% (~3.3V), RED LED always ON
         led_array[0].value = LED_ON
     else:
         led_array[0].value = LED_OFF
@@ -148,8 +159,8 @@ def ble_advertisement(ble, advertisement, tadv, sw_array, led_array):
     ble.stop_advertising()
 
 
-# get switch status and return its key code
-def get_keycode(sw_array):
+# check key status and return its keycode
+def check_switch(sw_array, keycode=0x00):
     # standard: https://www.usb.org/sites/default/files/hut1_21_0.pdf
     # default order: Reader/Kindle mode
     keycodes = [
@@ -160,7 +171,6 @@ def get_keycode(sw_array):
     ]
     if not sw_array[3].value:       # Kinoppy mode, swap FWD & REV
         keycodes[0], keycodes[1] = keycodes[1], keycodes[0]
-    keycode = 0x00  # initialize
     if not sw_array[0].value:       # FWD is pressed
         keycode = keycodes[0]
     elif not sw_array[1].value:     # REV is pressed
@@ -173,6 +183,13 @@ def get_keycode(sw_array):
     return keycode
 
 
+# get switch status and return its key code
+def get_keycode(sw_array):
+    keycode = 0x00  # initialize
+    keycode = check_switch(sw_array, keycode)  # overwrite keycode
+    return keycode
+
+
 # set interrupt and goto light sleep
 # tls[sec]:light sleep timer for keep alive BLE
 def light_sleep(tls, led_array):
@@ -182,7 +199,7 @@ def light_sleep(tls, led_array):
     back_alarm = alarm.pin.PinAlarm(pin=board.D6, value=False)
     time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + tls)
     print('(suya~)', end='')
-    led_array[3].value = LED_ON     # external led on while light sleep
+    led_array[3].value = LED_ON     # external LED on while light sleep
     alarm.light_sleep_until_alarms(
         fwd_alarm, rev_alarm, back_alarm, time_alarm)
     led_array[3].value = LED_OFF
@@ -198,9 +215,10 @@ def deepsleep_led(led_array):
 
 
 # set interrupt and goto pseudo deep sleep
-# (true deep sleep of XIAO nRF52840 has 2mA leak current)
+# (true deep sleep of my XIAO nRF52840 has 2mA leak current)
 # when charging, don't deep sleep for protect VBATT pin (P0.31)
 def deep_sleep(ble, sw_array, led_array):
+    ble_disconnection(ble)
     deepsleep_led(led_array)
     # power sw alarm needs external pullup for deep sleep although D9 in para.
     pwsw_alarm = alarm.pin.PinAlarm(pin=board.D6, value=False)
@@ -213,7 +231,7 @@ def deep_sleep(ble, sw_array, led_array):
     if charge_flag:   # is True, do not in charge state
         print('do not charge. DEEP sleep until pwsw or start charge.', end='')
         chg_alarm = alarm.pin.PinAlarm(pin=board.CHARGE_STATUS, value=False)
-        # goto pseudo deepsleep
+        # goto pseudo deepsleep for protect battery monitor pins
         # alarm.exit_and_deep_sleep_until_alarms(pwsw_alarm, chg_alarm)
         alarm.light_sleep_until_alarms(pwsw_alarm, chg_alarm)
     else:
@@ -228,7 +246,7 @@ def deep_sleep(ble, sw_array, led_array):
             # change alarm logic to charge ON
             chg_alarm =\
                 alarm.pin.PinAlarm(pin=board.CHARGE_STATUS, value=False)
-            # goto pseudo deepsleep
+            # goto pseudo deepsleep for protect battery monitor pins
             # alarm.exit_and_deep_sleep_until_alarms(pwsw_alarm, chg_alarm)
             alarm.light_sleep_until_alarms(pwsw_alarm, chg_alarm)
     # print('wakeup with power sw. software reset', end='')
@@ -236,28 +254,30 @@ def deep_sleep(ble, sw_array, led_array):
     supervisor.reload()     # forced reboot
 
 
-# turner actions
-def pager(keycode, cc, bs, rbat, ble, led_array):
-    led_array[2].value = LED_ON
+# send page turner actions via BLE
+def pager(keycode, cc, bs, rbat, led_array):
+    led_array[2].value = LED_ON     # blue LED
+    # set battery level before send
+    bs.level = battery_percent(rbat.value, led_array)
+    # send command
     cc.send(keycode)
     print('send keydata via bluetooth.', end='')
-    bs.level = battery_percent(rbat.value, led_array)
-    time.sleep(0.1)     # blink BLUE LED short
+    time.sleep(0.2)     # blink BLUE LED short
     led_array[2].value = LED_OFF
 
 
 # function to turn pages in e-books
 # tadv[sec]:wait time for advertisement, tls[sec]:light sleep timer
 def ebook_turner(tadv=60, tls=60):
-    # set P0.14 to LOW before battery monitor
+    # for battery operation, shuld set p0.14 to low
     vbatt_port_guard()
-    # set battery charge mode to HIGH because this use 600mAh battery
+    # set battery charge mode to HIGH because I use 600mAh battery
     battery_charge_mode('HIGH')
     # define pin configurations
     led_array = define_led()
     sw_array = define_switch()
     # battery monitor
-    rbat = analogio.AnalogIn(board.VBATT)   # VBATT R/O, 0-65535
+    rbat = analogio.AnalogIn(board.VBATT)   # VBATT raw R/O, 0-65535
     # bluetooth HID and Battery device description
     ble = BLERadio()
     ble.name = 'eBook_turner_w2'
@@ -266,7 +286,7 @@ def ebook_turner(tadv=60, tls=60):
     advertisement = ProvideServicesAdvertisement(hid)
     cc = ConsumerControl(hid.devices)
     bs = BatteryService()
-    # battery check in startup
+    # initial battery level
     bs.level = battery_percent(rbat.value, led_array)
     # Disconnect if already connected for properly paring
     ble_disconnection(ble)
@@ -279,16 +299,17 @@ def ebook_turner(tadv=60, tls=60):
     # key operation
     while ble.connected:
         print('\nconnected! ', end='')
+        # light sleep until interrupt by key or tap
+        light_sleep(tls, led_array)
         keycode = get_keycode(sw_array)
         print('keycode: 0x{:X}, '.format(keycode), end='')
-        if keycode:     # keycode is not 0x00
-            pager(keycode, cc, bs, rbat, ble, led_array)
+        if keycode:     # is not 0x00
+            pager(keycode, cc, bs, rbat, led_array)
         else:
-            print('there is no keycode')
+            print('there is no keycode (may wakeup by timer)', end='')
         if keycode == 0x30:    # power off
-            ble_disconnection(ble)
+            # ble_disconnection(ble)
             deep_sleep(ble, sw_array, led_array)
-        light_sleep(tls, led_array)
     print('\ndisconnected')
     deep_sleep(ble, sw_array, led_array)
 

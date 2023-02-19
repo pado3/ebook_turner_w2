@@ -1,20 +1,25 @@
 '''
-eBook_turner_w2 Android用電子書籍ページめくり機 BLE版 ver.2 by @pado3
+eBook_turner_w2.py
+e-book page turner for android with BLE ver.2 by @pado3
 target device: Seeed studio XIAO nRF52840 Sense (w/LSM6DS3TR-C)
 
 r1.0 2023/02/15 initial release
+r1.1 2023/02/19 minor modification. append, translate and correct comments
 
-Reader&KindleはUPで戻りDOWNで送る。Kinoppyは逆。読書尚友&なろうリーダは任意。
-FWD:D3+4, REV:D8+9, BACK/PW:D5+6, mode:D7 (3,8,5,7が入力、4,9,6が割り込み)
-D5はDeep sleep中も監視するため外部プルアップ(100k)
-D7はKinoppyモードで常時LOWに引くため内部13kではリーク大きく外部プルアップ(100k)
-外部LED Anode:D1(常時H), Kathode:D0(XIAO内蔵LEDと同じく逆論理)
-light sleep中にダブルタップするとマウスクリックする
+memo.
+Reader & Kindle : forward page with volume decrement, reverse with increment
+Kinoppy : forward page with volume increment, reverse with decrement
+読書尚友 & なろうリーダ : selectable
+FWD:D3+4, REV:D8+9, BACK/POWER:D5+6, mode:D7 (3,8,5,7:input, 4,9,6:interrupt)
+mouse click almost center of screen : INT1 with double tap
+D3, D8:internal pullup (typ.13k)
+D5:external pullup 100k(use interrupt with deep sleep)
+D7:external pullup 100k(internal is too small when Kinoppy keep low)
+external LED Anode:D1(always True), Kathode:D0 (reverse logic same as internal)
 '''
 import alarm
 import analogio     # use .AnalogIn() only
 import board
-import busio        # use .I2C() only
 import digitalio
 import microcontroller
 import supervisor   # use .reload() only
@@ -23,8 +28,10 @@ from adafruit_ble import BLERadio
 from adafruit_ble.advertising.standard import ProvideServicesAdvertisement
 from adafruit_ble.services.standard import BatteryService
 from adafruit_ble.services.standard.hid import HIDService
-from adafruit_bus_device.i2c_device import I2CDevice
 from adafruit_hid.consumer_control import ConsumerControl
+# libraries related to sensor
+import busio        # use .I2C() only
+from adafruit_bus_device.i2c_device import I2CDevice
 from adafruit_hid.mouse import Mouse
 from adafruit_lsm6ds.lsm6ds3trc import LSM6DS3TRC   # use CHIP_ID only
 from adafruit_register.i2c_bit import RWBit
@@ -45,7 +52,7 @@ class ImuInt1Control:
     # see ST_LSM6DS3TR-C datasheet
     # R/W resisters. #:used in this project
     INT1_CTRL = RWBits(8, const(0x0D), 0)
-    CTRL1_XL = RWBits(8, const(0x10), 0)    # use upper 4bit as ODR_XL
+    CTRL1_XL = RWBits(8, const(0x10), 0)    # ODR_XL is upper 4bit
     CTRL2_G = RWBits(8, const(0x11), 0)
     CTRL3_C = RWBits(8, const(0x12), 0)     # use 1bit as SW_RESET
     CTRL4_C = RWBits(8, const(0x13), 0)
@@ -101,7 +108,7 @@ def vbatt_port_guard():
     # set P0.14 to LOW
     ebat = digitalio.DigitalInOut(board.READ_BATT_ENABLE)
     ebat.direction = digitalio.Direction.OUTPUT
-    ebat.value = False  # should set low before ADC or until charge
+    ebat.value = False  # MUST be set low in battery operatoin
     time.sleep(0.1)     # wait for ebat pin to GND
 
 
@@ -131,7 +138,7 @@ def define_led():
         board.LED_RED,      # 2.2k
         board.LED_GREEN,    # 10k (?)
         board.LED_BLUE,     # 2.2k
-        board.D0,           # additional LED with low current (10k, 0.15mA)
+        board.D0,           # additional LED with low current (10k, 0.1mA)
     ]
     for pin in led_pins:
         led_pin = digitalio.DigitalInOut(pin)
@@ -164,7 +171,7 @@ def define_switch():
 
 # define and initialize sensor as W-tap detector, return interrupt object
 def define_sensor():
-    # define IMU power and on
+    # define IMU power and turn on
     imupwr = digitalio.DigitalInOut(board.IMU_PWR)
     imupwr.direction = digitalio.Direction.OUTPUT
     imupwr.value = True
@@ -182,17 +189,17 @@ def define_sensor():
     # ODR: Output Data Rate. I set 208Hz (~5ms), max freq in normal power mode
     int1c.CTRL1_XL = 0x58       # 10h, 0101 1000 Power-up, 208Hz(*), FS+-4g
     int1c.TAP_CFG = 0x8E        # 58h, 1000 1110 INT_EN, keep ODR, XYZ
-    int1c.TAP_THS_6D = 0x0A     # 59h, 0000 1010 ths:12/32(=2.5g)(*)
+    int1c.TAP_THS_6D = 0x0A     # 59h, 0000 1010 ths:10/32(=1.25g)(*)
     # INT_DUR2, ODR_XL time is 1/f at CTRL1_XL. GAP~.5s, Q~.04s, DURmax~.08s
     int1c.INT_DUR2 = 0x3A       # 5Ah, 0011 1010 duration, quiet setting (all*)
     int1c.WAKE_UP_THS = 0x88    # 5Bh, 1000 1000 S&W tap EN, wakeup ths:8/64(*)
     int1c.MD1_CFG = 0x08        # 5Eh, 0010 1001 routing W tap only
     '''
-    # sample parameters by chuck '22/5 on Seeed forum
+    # sample parameters by chuck '22/5 on Seeed forum (same as AN5130 of STM)
     # title: 'XIAO BLE Sense - LSM6DS3 INT1 Single Tap Interrupt'
     int1c.CTRL1_XL = 0x60       # 10h, 0110 0000 416Hz(~2.5ms), FS_XL+-2g
     int1c.TAP_CFG = 0x8E        # 58h, 1000 1110 INT_EN, SLOPE_FDS, XYZ
-    int1c.TAP_THS_6D = 0x8C     # 59h, 1000 0101 6D, ths:12/32(=1.5g)
+    int1c.TAP_THS_6D = 0x8C     # 59h, 1000 1100 6D, ths:12/32(=0.75g) (why 6D?)
     int1c.INT_DUR2 = 0x7F       # 5Ah, 0111 1111 GAP~.6s, Q~.03, DURmax~.06s
     int1c.WAKE_UP_THS = 0x80    # 5Bh, 1000 0000 S&W EN, ths:none
     int1c.MD1_CFG = 0x08        # 5Eh, 0000 1000 W to INT1
@@ -200,16 +207,21 @@ def define_sensor():
     return int1c
 
 
-# calculate battery level in percent and set low battery LED
+# calculate battery level in percent and set low battery alart
 def battery_percent(readout, led_array):
+    # vbat[raw] = 3300[mV]*(510k/(1M+510k))/2^16 in linear region (Vdd>3.3V)
     vbat = readout * (3300 / 65536) * (1510 / 510)
+    # experimentally, 100% : 3.7V~23900raw, 0% : 2.5V~21400raw
+    # see: https://twitter.com/pado3/status/1613699618092744704/photo/3
     pc = int(100 * (readout - 21400) / (23900 - 21400))
     print('VBATT:{:.0f}mV, {}%, '.format(vbat, pc), end='')
+    # percentage limitation in BatteryService : uint8, 0~100
     if pc > 100:
         pc = 100
     elif pc < 0:
         pc = 0
-    if pc < 20:     # below 20% (~3.3V), RED led always ON
+    # low battery alart
+    if pc < 20:     # below 20% (~3.3V), RED LED always ON
         led_array[0].value = LED_ON
     else:
         led_array[0].value = LED_OFF
@@ -251,14 +263,16 @@ def ble_advertisement(ble, advertisement, tadv, sw_array, led_array):
     ble.stop_advertising()
 
 
+# check W tap status and return its keycode
 def check_sensor(int1c, keycode=0x00):
     wt = int1c.DOUBLE_TAP
     print('W_TAP: {}, '.format(wt), end='')
     if wt:
-        keycode = 0x76  # instead of 'Keyboard Menu' in standard
+        keycode = 0x76  # instead of 'Keyboard Menu' in USB HID Usage Tables
     return keycode
 
 
+# check key status and return its keycode
 def check_switch(sw_array, keycode=0x00):
     # standard: https://www.usb.org/sites/default/files/hut1_21_0.pdf
     # default order: Reader/Kindle mode
@@ -301,7 +315,7 @@ def light_sleep(tls, led_array):
     int1_alarm = alarm.pin.PinAlarm(pin=board.IMU_INT1, value=True)
     time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + tls)
     print('(suya~)', end='')
-    led_array[3].value = LED_ON     # external led on while light sleep
+    led_array[3].value = LED_ON     # external LED on while light sleep
     alarm.light_sleep_until_alarms(
         fwd_alarm, rev_alarm, back_alarm, int1_alarm, time_alarm)
     led_array[3].value = LED_OFF
@@ -317,9 +331,10 @@ def deepsleep_led(led_array):
 
 
 # set interrupt and goto pseudo deep sleep
-# (true deep sleep of XIAO nRF52840 has 2mA leak current)
+# (true deep sleep of my XIAO nRF52840 has 2mA leak current)
 # when charging, don't deep sleep for protect VBATT pin (P0.31)
 def deep_sleep(ble, int1c, sw_array, led_array):
+    ble_disconnection(ble)
     deepsleep_led(led_array)
     int1c.ODR_XL = 0x0  # IMU Accelerometer power down (85uA -> 3uA typ.)
     # power sw alarm needs external pullup for deep sleep although D9 in para.
@@ -333,7 +348,7 @@ def deep_sleep(ble, int1c, sw_array, led_array):
     if charge_flag:   # is True, do not in charge state
         print('do not charge. DEEP sleep until pwsw or start charge.', end='')
         chg_alarm = alarm.pin.PinAlarm(pin=board.CHARGE_STATUS, value=False)
-        # goto pseudo deepsleep
+        # goto pseudo deepsleep for protect battery monitor pins
         # alarm.exit_and_deep_sleep_until_alarms(pwsw_alarm, chg_alarm)
         alarm.light_sleep_until_alarms(pwsw_alarm, chg_alarm)
     else:
@@ -348,7 +363,7 @@ def deep_sleep(ble, int1c, sw_array, led_array):
             # change alarm logic to charge ON
             chg_alarm =\
                 alarm.pin.PinAlarm(pin=board.CHARGE_STATUS, value=False)
-            # goto pseudo deepsleep
+            # goto pseudo deepsleep for protect battery monitor pins
             # alarm.exit_and_deep_sleep_until_alarms(pwsw_alarm, chg_alarm)
             alarm.light_sleep_until_alarms(pwsw_alarm, chg_alarm)
     # print('wakeup with power sw. software reset', end='')
@@ -356,19 +371,22 @@ def deep_sleep(ble, int1c, sw_array, led_array):
     supervisor.reload()     # forced reboot
 
 
-# turner actions
-def pager(keycode, ms, cc, bs, rbat, ble, led_array):
-    led_array[2].value = LED_ON
+# send page turner actions via BLE
+def pager(keycode, ms, cc, bs, rbat, led_array):
+    led_array[2].value = LED_ON     # blue LED
+    # set battery level before send
+    bs.level = battery_percent(rbat.value, led_array)
+    # send command
     if keycode == 0x76:     # double tap instead of 'Keyboard Menu'
         # goto upper left from any position (BOOX Poke Pro:1072x1448)
-        # cursor should move little by little
+        # cursor should move little by little. need to tune with target reader
         for i in range(10):
             ms.move(-108, -145)
-            time.sleep(0.06)    # perhaps related to reflesh
+            time.sleep(0.06)    # perhaps related to scan frequency
         # goto almost center. blink LED for notificate
         led_array[2].value = LED_OFF
         for i in range(5):
-            ms.move(108, 133)   # y parameter tuned with real device
+            ms.move(108, 133)   # y parameter tuned with real reader
             time.sleep(0.06)
         led_array[2].value = LED_ON
         ms.click(Mouse.LEFT_BUTTON)
@@ -377,17 +395,16 @@ def pager(keycode, ms, cc, bs, rbat, ble, led_array):
     else:
         cc.send(keycode)
         print('send keydata via bluetooth.', end='')
-    bs.level = battery_percent(rbat.value, led_array)
-    time.sleep(0.1)     # blink BLUE LED short
+    time.sleep(0.2)     # blink BLUE LED short
     led_array[2].value = LED_OFF
 
 
 # function to turn pages in e-books
 # tadv[sec]:wait time for advertisement, tls[sec]:light sleep timer
 def ebook_turner(tadv=60, tls=60):
-    # set P0.14 to LOW before battery monitor
+    # for battery operation, shuld set p0.14 to low
     vbatt_port_guard()
-    # set battery charge mode to HIGH because this use 600mAh battery
+    # set battery charge mode to HIGH because I use 600mAh battery
     battery_charge_mode('HIGH')
     # define pin configurations
     led_array = define_led()
@@ -395,7 +412,7 @@ def ebook_turner(tadv=60, tls=60):
     # define and initialize sensor as W-tap detector, get interrupt object
     int1c = define_sensor()
     # battery monitor
-    rbat = analogio.AnalogIn(board.VBATT)   # VBATT R/O, 0-65535
+    rbat = analogio.AnalogIn(board.VBATT)   # VBATT raw R/O, 0-65535
     # bluetooth HID and Battery device description
     ble = BLERadio()
     ble.name = 'eBook_turner_w2'
@@ -405,7 +422,7 @@ def ebook_turner(tadv=60, tls=60):
     cc = ConsumerControl(hid.devices)
     ms = Mouse(hid.devices)
     bs = BatteryService()
-    # battery check in startup
+    # initial battery level
     bs.level = battery_percent(rbat.value, led_array)
     # Disconnect if already connected for properly paring
     ble_disconnection(ble)
@@ -418,16 +435,17 @@ def ebook_turner(tadv=60, tls=60):
     # key operation
     while ble.connected:
         print('\nconnected! ', end='')
+        # light sleep until interrupt by key or tap
+        light_sleep(tls, led_array)
         keycode = get_keycode(int1c, sw_array)
         print('keycode: 0x{:X}, '.format(keycode), end='')
-        if keycode:     # keycode is not 0x00
-            pager(keycode, ms, cc, bs, rbat, ble, led_array)
+        if keycode:     # is not 0x00
+            pager(keycode, ms, cc, bs, rbat, led_array)
         else:
-            print('there is no keycode')
+            print('there is no keycode (may wakeup by timer)', end='')
         if keycode == 0x30:    # power off
-            ble_disconnection(ble)
+            # ble_disconnection(ble)
             deep_sleep(ble, int1c, sw_array, led_array)
-        light_sleep(tls, led_array)
     print('\ndisconnected')
     deep_sleep(ble, int1c, sw_array, led_array)
 
