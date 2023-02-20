@@ -7,6 +7,7 @@ r1.0 2023/02/15 initial release
 r1.1 2023/02/19 minor modification. append, translate and correct comments
 r1.2 2023/02/19 fix typo
 r1.3 2023/02/20 fix typo
+r1.4 2023/02/21 fix typo
 
 memo.
 Reader & Kindle : forward page with volume decrement, reverse with increment
@@ -270,7 +271,7 @@ def check_sensor(int1c, keycode=0x00):
     wt = int1c.DOUBLE_TAP
     print('W_TAP: {}, '.format(wt), end='')
     if wt:
-        keycode = 0x76  # instead of 'Keyboard Menu' in USB HID Usage Tables
+        keycode = 0x40  # instead of 'Menu' in USB HID Usage Tables p.117
     return keycode
 
 
@@ -282,7 +283,7 @@ def check_switch(sw_array, keycode=0x00):
         0xEA,   # Volume Decrement p.120, FWD in Reader/Kindle mode
         0xE9,   # Volume Increment p.120, FWD in Kinoppy mode
         0x224,  # AC BACK p.124
-        0x30,   # Power p.118
+        0x30,   # Power p.117
     ]
     if not sw_array[3].value:       # Kinoppy mode, swap FWD & REV
         keycodes[0], keycodes[1] = keycodes[1], keycodes[0]
@@ -379,7 +380,7 @@ def pager(keycode, ms, cc, bs, rbat, led_array):
     # set battery level before send
     bs.level = battery_percent(rbat.value, led_array)
     # send command
-    if keycode == 0x76:     # double tap instead of 'Keyboard Menu'
+    if keycode = 0x40   # instead of 'Menu'
         # goto upper left from any position (BOOX Poke Pro:1072x1448)
         # cursor should move little by little. need to tune with target reader
         for i in range(10):
