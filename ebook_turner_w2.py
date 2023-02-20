@@ -8,6 +8,7 @@ r1.1 2023/02/19 minor modification. append, translate and correct comments
 r1.2 2023/02/19 fix typo
 r1.3 2023/02/20 fix typo
 r1.4 2023/02/21 fix typo
+r1.5 2023/02/21 fix typo
 
 memo.
 Reader & Kindle : forward page with volume decrement, reverse with increment
@@ -196,7 +197,7 @@ def define_sensor():
     # INT_DUR2, ODR_XL time is 1/f at CTRL1_XL. GAP~.5s, Q~.04s, DURmax~.08s
     int1c.INT_DUR2 = 0x3A       # 5Ah, 0011 1010 duration, quiet setting (all*)
     int1c.WAKE_UP_THS = 0x88    # 5Bh, 1000 1000 S&W tap EN, wakeup ths:8/64(*)
-    int1c.MD1_CFG = 0x08        # 5Eh, 0010 1001 routing W tap only
+    int1c.MD1_CFG = 0x08        # 5Eh, 0000 1001 routing W tap only
     '''
     # sample parameters by chuck '22/5 on Seeed forum (same as AN5130 of STM)
     # title: 'XIAO BLE Sense - LSM6DS3 INT1 Single Tap Interrupt'
@@ -380,7 +381,7 @@ def pager(keycode, ms, cc, bs, rbat, led_array):
     # set battery level before send
     bs.level = battery_percent(rbat.value, led_array)
     # send command
-    if keycode = 0x40   # instead of 'Menu'
+    if keycode == 0x40:     # instead of 'Menu'
         # goto upper left from any position (BOOX Poke Pro:1072x1448)
         # cursor should move little by little. need to tune with target reader
         for i in range(10):
